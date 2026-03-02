@@ -1,9 +1,14 @@
-name: Sync OpenWRT Releases
+name: Sync ImmortalWrt Releases
 
 on:
-  # schedule:
-   # - cron: '0 0 */3 * *' # Проверка новых релизов раз в три дня
-  # workflow_dispatch: # Возможность вручную запустить Action
+  schedule:
+    - cron: '0 0 */3 * *' # Проверка каждые 3 дня
+  workflow_dispatch:
+    inputs:
+      force_version:
+        description: 'Принудительная версия (например, 24.10.5)'
+        required: false
+        default: '24.10.5'
 
 jobs:
   sync-releases:
@@ -12,26 +17,39 @@ jobs:
       release_exists: ${{ steps.check_release.outputs.release_exists }}
       release_tag: ${{ steps.get_release.outputs.release_tag }} 
     steps:
-      - name: Checkout your repo
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Get the latest release from OpenWRT
+      - name: Get Target Version
         id: get_release
         run: |
-          curl -s https://api.github.com/repos/openwrt/openwrt/releases/latest > latest_release.json
-          RELEASE_TAG=$(jq -r .tag_name latest_release.json)
-          RELEASE_NAME=$(jq -r .name latest_release.json)
-          echo "::set-output name=release_tag::$RELEASE_TAG"
-          echo "::set-output name=release_name::$RELEASE_NAME"
+          # Если запущено вручную с указанием версии
+          if [ "${{ github.event.inputs.force_version }}" != "" ]; then
+            VERSION="${{ github.event.inputs.force_version }}"
+          else
+            # Иначе берем последний стабильный релиз из API ImmortalWrt
+            VERSION=$(curl -s https://api.github.com | jq -r 'map(select(.prerelease==false)) | first | .tag_name' | sed 's/^v//')
+          fi
+          
+          if [ "$VERSION" == "null" ] || [ -z "$VERSION" ]; then
+            echo "Ошибка: Не удалось определить версию" && exit 1
+          fi
+
+          echo "release_tag=$VERSION" >> $GITHUB_OUTPUT
+          echo "Используемая версия: $VERSION"
 
       - name: Check if release exists in your repo
         id: check_release
         run: |
-          RELEASE_EXISTS=$(curl -s https://api.github.com/repos/Slava-Shchipunov/awg-openwrt/releases/tags/${{ steps.get_release.outputs.release_tag }} | jq -r .tag_name)
-          if [ "$RELEASE_EXISTS" == "null" ]; then
-            echo "::set-output name=release_exists::false"
+          # Проверяем наличие тега в ВАШЕМ репозитории (с префиксом v)
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://api.github.com{{ github.repository }}/releases/tags/v${{ steps.get_release.outputs.release_tag }}")
+          
+          if [ "$HTTP_STATUS" == "200" ]; then
+            echo "release_exists=true" >> $GITHUB_OUTPUT
+            echo "Релиз v${{ steps.get_release.outputs.release_tag }} уже есть."
           else
-            echo "::set-output name=release_exists::true"
+            echo "release_exists=false" >> $GITHUB_OUTPUT
+            echo "Релиз v${{ steps.get_release.outputs.release_tag }} не найден, создаем..."
           fi
 
       - name: Create release in your repo
@@ -39,28 +57,29 @@ jobs:
         run: |
           ART="
           \`\`\`
-            _______                     ________        __
-           |       |.-----.-----.-----.|  |  |  |.----.|  |_
-           |   -   ||  _  |  -__|     ||  |  |  ||   _||   _|
-           |_______||   __|_____|__|__||________||__|  |____|
-                    |__| A M N E Z I A   W I R E G U A R D
-          -----------------------------------------------------
-          OpenWrt ${{ steps.get_release.outputs.release_tag }}
-          -----------------------------------------------------
+           ___                               _        _ _ _  _        _ 
+
+          |_ _|_ __  _ __  _  ___  _ __  __| |_ __ _| | | || | _ __ _| |_ 
+           | || '  \| '  \| |/ _ \| '__|/ _  | '__/ _  | | | || | '__/ _  |
+           | || | | | | | | | (_) | |  | (_| | | | (_| | | | || | | | (_| |
+          |___|_| |_|_| |_|_|\___/|_|   \__,_|_|  \__,_|_|_|_||_|_|  \__,_|
+          -----------------------------------------------------------------
+          ImmortalWrt ${{ steps.get_release.outputs.release_tag }}
+          -----------------------------------------------------------------
           \`\`\`"
 
-          curl -X POST https://api.github.com/repos/Slava-Shchipunov/awg-openwrt/releases \
+          curl -X POST https://api.github.com{{ github.repository }}/releases \
             -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
             -H "Content-Type: application/json" \
-            -d "$(jq -n --arg tag "${{ steps.get_release.outputs.release_tag }}" \
-                    --arg name "Build amnezia wg for all devices with openwrt ${{ steps.get_release.outputs.release_tag }}" \
+            -d "$(jq -n --arg tag "v${{ steps.get_release.outputs.release_tag }}" \
+                    --arg name "Build AmneziaWG for ImmortalWrt ${{ steps.get_release.outputs.release_tag }}" \
                     --arg body "$ART" \
                     '{ tag_name: $tag, name: $name, body: $body }')"
   
   run-build:
-    runs-on: ubuntu-latest
     needs: sync-releases
     if: needs.sync-releases.outputs.release_exists == 'false'
+    # Используем ваш путь к билдеру
     uses: Slava-Shchipunov/awg-openwrt/.github/workflows/build-module.yml@master
     with:
       tag_name: ${{ needs.sync-releases.outputs.release_tag }}
