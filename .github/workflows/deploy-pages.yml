@@ -1,4 +1,4 @@
-name: Deploy OpenWrt Feed Pages
+name: Deploy Immortalwrt Feed Pages
 
 on:
   workflow_dispatch:
