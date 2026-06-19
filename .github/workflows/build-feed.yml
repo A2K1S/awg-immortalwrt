@@ -1,4 +1,4 @@
-name: Build OpenWrt Feed
+name: Build Immortalwrt Feed
 
 on:
   workflow_dispatch:
